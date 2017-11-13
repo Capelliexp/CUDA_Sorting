@@ -16,64 +16,43 @@ void SortElements(int* data, int pos);
 void CheckDataOrder(int dataSorted[]);
 void PrintError(int zone, cudaError_t* blob);
 
-#define DATA_AMOUNT 50000
-#define BLOCK_AMOUNT 1024		//max 65535 ???
-#define THREADS_PER_BLOCK 128	//max 1024 ???
+#define DATA_AMOUNT 100000
+#define BLOCK_AMOUNT 1024		//max 1024 ???
+#define THREADS_PER_BLOCK 256	//max 128 ???
+#define THREADS_PER_GRID (BLOCK_AMOUNT*THREADS_PER_BLOCK)
 
 const dim3 blockSize = dim3(BLOCK_AMOUNT, 1, 1);
 const dim3 threadsPerBlock = dim3(THREADS_PER_BLOCK, 1, 1);
 
 //DEVICE
 __global__
-void OddEvenSortv1(int* data_d, int n) {
-	int i = threadIdx.x + blockDim.x * blockIdx.x;
-	int iter = i * 2;
-
-	if (iter < n) {
-		if (data_d[iter] > data_d[iter + 1]) {
-			int temp = data_d[iter];
-			data_d[iter] = data_d[iter + 1];
-			data_d[iter + 1] = temp;
-		}
-		iter++;
-		__syncthreads();
-		if (data_d[iter] > data_d[iter + 1]) {
-			int temp = data_d[iter];
-			data_d[iter] = data_d[iter + 1];
-			data_d[iter + 1] = temp;
-		}
-	}
-}
-
-__global__
-void OddEvenSortv2(int* data_d, int n) {
-	int i = threadIdx.x + blockDim.x * blockIdx.x;
-	long iter = i * 2;
+void OddEvenSort(int* data_d, int n, int blockRoof, int loopNr) {
+	int i = threadIdx.x + (THREADS_PER_BLOCK * blockIdx.x) + (THREADS_PER_GRID * loopNr);
+	i *= 2;
 	int evenSwitch = 0;
 
-	int compLeft = data_d[iter];
-	int compMid = data_d[iter + 1];
+	int compLeft = data_d[i];
+	int compMid = data_d[i + 1];
 
-	if (iter < n) {
+	if (i < DATA_AMOUNT) {
 		if (compLeft > compMid) {
 			int temp = compLeft;
 			compLeft = compMid;
 			compMid = temp;
-			data_d[iter] = (int)compLeft;
+			data_d[i] = (int)compLeft;
 			evenSwitch++;
 		}
 		
-		iter++;
+		i++;
 		__syncthreads();
-
-		int compRight = data_d[iter + 1];
+		int compRight = data_d[i + 1];
 
 		if (compMid > compRight) {
-			data_d[iter] = compRight;
-			data_d[iter + 1] = compMid;
+			data_d[i] = compRight;
+			data_d[i + 1] = compMid;
 		}
 		else if(evenSwitch > 0) {
-			data_d[iter] = compMid;
+			data_d[i] = compMid;
 		}
 	}
 }
@@ -90,10 +69,11 @@ int main(int argc, char* argv[]) {
 	dataSortedByCUDA = SortCUDA(data);
 	CheckDataOrder(dataSortedByCUDA);
 
-	std::cout << std::endl;
+	//std::cout << std::endl;
 
-	dataSortedByCPU = SortCPU(data);	
-	CheckDataOrder(dataSortedByCPU);
+	
+	//dataSortedByCPU = SortCPU(data);	
+	//CheckDataOrder(dataSortedByCPU);
 
 	std::cout << std::endl << "fin" << std::endl;
 	getchar();
@@ -138,14 +118,18 @@ int* SortCUDA(int* data) {
 	int* dataSorted = new int[DATA_AMOUNT];
 	int* data_d = 0;
 	cudaError_t blob;
+	int loops = 1;
 
+	while ((BLOCK_AMOUNT*THREADS_PER_BLOCK*loops) < DATA_AMOUNT)
+		loops++;
 
 	if ((blob = cudaMalloc((void**)&data_d, (DATA_AMOUNT + 1) * sizeof(int))) != cudaSuccess) PrintError(0, &blob);
 	if ((blob = cudaMemcpy(data_d, data, (DATA_AMOUNT + 1) * sizeof(int), cudaMemcpyHostToDevice)) != cudaSuccess) PrintError(1, &blob);
 
 	start = std::clock();	//timer start
 	for (int i = 0; i < (DATA_AMOUNT / 2) + 1; i++)
-		OddEvenSortv2 <<<blockSize, threadsPerBlock >> > (data_d, (int)DATA_AMOUNT);
+		for(int j = 0; j < loops; j++)
+			OddEvenSort<<<blockSize, threadsPerBlock >>> (data_d, (int)DATA_AMOUNT, (int)BLOCK_AMOUNT, j);
 
 	duration = (std::clock() - start) / (double)CLOCKS_PER_SEC;	//timer stop
 	std::cout << "CUDA sorting time: " << duration << " sec" << std::endl;

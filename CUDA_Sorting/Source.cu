@@ -12,21 +12,21 @@ void PrintGenInfo();
 void FillArray(int data[]);
 int* SortCUDA(int* data);
 int* SortCPU(int* data);
-void SortElements(int* data, int pos);
+void SortElements(int* data, int pos, int mod);
 void CheckDataOrder(int dataSorted[]);
 void PrintError(int zone, cudaError_t* blob);
 
-#define DATA_AMOUNT 100000
-#define BLOCK_AMOUNT 1024		//max 1024 ???
-#define THREADS_PER_BLOCK 256	//max 128 ???
-#define THREADS_PER_GRID (BLOCK_AMOUNT*THREADS_PER_BLOCK)
+#define DATA_AMOUNT 200
+#define BLOCK_AMOUNT 1024
+#define THREADS_PER_BLOCK 32
+#define THREADS_PER_GRID (BLOCK_AMOUNT*THREADS_PER_BLOCK)	//max 131072 ???
 
 const dim3 blockSize = dim3(BLOCK_AMOUNT, 1, 1);
 const dim3 threadsPerBlock = dim3(THREADS_PER_BLOCK, 1, 1);
 
 //DEVICE
 __global__
-void OddEvenSort(int* data_d, int n, int blockRoof, int loopNr) {
+void OddEvenSortv1(int* data_d, int n, int blockRoof, int loopNr) {
 	int i = threadIdx.x + (THREADS_PER_BLOCK * blockIdx.x) + (THREADS_PER_GRID * loopNr);
 	i *= 2;
 	int evenSwitch = 0;
@@ -42,7 +42,7 @@ void OddEvenSort(int* data_d, int n, int blockRoof, int loopNr) {
 			data_d[i] = (int)compLeft;
 			evenSwitch++;
 		}
-		
+
 		i++;
 		__syncthreads();
 		int compRight = data_d[i + 1];
@@ -51,8 +51,28 @@ void OddEvenSort(int* data_d, int n, int blockRoof, int loopNr) {
 			data_d[i] = compRight;
 			data_d[i + 1] = compMid;
 		}
-		else if(evenSwitch > 0) {
+		else if (evenSwitch > 0) {
 			data_d[i] = compMid;
+		}
+	}
+}
+
+__global__
+void OddEvenSortv2(int* data_d) {
+	int id = threadIdx.x + (blockDim.x * blockIdx.x);
+	id *= 2;
+
+	if (id < DATA_AMOUNT) {
+		int pos;
+
+		for (int i = 0; i < DATA_AMOUNT; ++i) {
+			pos = id + i%2;
+			__syncthreads;
+			if (data_d[pos] > data_d[pos + 1]) {
+				int temp = data_d[pos];
+				data_d[pos] = data_d[pos + 1];
+				data_d[pos + 1] = temp;
+			}
 		}
 	}
 }
@@ -69,12 +89,11 @@ int main(int argc, char* argv[]) {
 	dataSortedByCUDA = SortCUDA(data);
 	CheckDataOrder(dataSortedByCUDA);
 
-	//std::cout << std::endl;
-
+	/*std::cout << std::endl;
 	
-	//dataSortedByCPU = SortCPU(data);	
-	//CheckDataOrder(dataSortedByCPU);
-
+	dataSortedByCPU = SortCPU(data);	
+	CheckDataOrder(dataSortedByCPU);
+	*/
 	std::cout << std::endl << "fin" << std::endl;
 	getchar();
 	return 0;
@@ -97,17 +116,17 @@ void PrintGenInfo() {
 
 //FILL DATA WITH RAND NUMBERS
 void FillArray(int data[]) {
+	srand(time(NULL));
 	for (int i = 0; i < DATA_AMOUNT; i++)
 		data[i] = (rand() % DATA_AMOUNT) + 1;
 
 	if (!(DATA_AMOUNT % 2))
 		data[DATA_AMOUNT] = (int)DATA_AMOUNT + 1;
 
-	
-	/*std::cout << "Pre sort:   ";
-	for (int i = 0; (i < DATA_AMOUNT - 1) && (i < 7); i++)
+	std::cout << "Pre sort:   ";
+	for (int i = 0; (i < DATA_AMOUNT - 1) && (i < 10); i++)
 		std::cout << data[i] << ", ";
-	std::cout << data[DATA_AMOUNT - 1] << (DATA_AMOUNT > 10 ? "..." : "") << std::endl;*/
+	std::cout << data[10] << (DATA_AMOUNT > 10 ? "..." : "") << std::endl << std::endl;
 }
 
 //SORT DATA WITH CUDA USING ODD-EVEN SORTING
@@ -120,23 +139,25 @@ int* SortCUDA(int* data) {
 	cudaError_t blob;
 	int loops = 1;
 
-	while ((BLOCK_AMOUNT*THREADS_PER_BLOCK*loops) < DATA_AMOUNT)
-		loops++;
+	/*while ((BLOCK_AMOUNT*THREADS_PER_BLOCK*loops) < DATA_AMOUNT)
+		loops++;*/
 
-	if ((blob = cudaMalloc((void**)&data_d, (DATA_AMOUNT + 1) * sizeof(int))) != cudaSuccess) PrintError(0, &blob);
-	if ((blob = cudaMemcpy(data_d, data, (DATA_AMOUNT + 1) * sizeof(int), cudaMemcpyHostToDevice)) != cudaSuccess) PrintError(1, &blob);
+	if ((blob = cudaMalloc((void**)&data_d, (DATA_AMOUNT+1) * sizeof(int))) != cudaSuccess) PrintError(0, &blob);
+	if ((blob = cudaMemcpy(data_d, data, (DATA_AMOUNT+1) * sizeof(int), cudaMemcpyHostToDevice)) != cudaSuccess) PrintError(1, &blob);
 
 	start = std::clock();	//timer start
-	for (int i = 0; i < (DATA_AMOUNT / 2) + 1; i++)
-		for(int j = 0; j < loops; j++)
-			OddEvenSort<<<blockSize, threadsPerBlock >>> (data_d, (int)DATA_AMOUNT, (int)BLOCK_AMOUNT, j);
+	//for (int i = 0; i < (DATA_AMOUNT / 2) + 1; i++)
+		/*for(int j = 0; j < loops; j++)
+			OddEvenSortv1<<<blockSize, threadsPerBlock >>> (data_d, (int)DATA_AMOUNT, (int)BLOCK_AMOUNT, j);*/
+			
+	OddEvenSortv2<<<blockSize, threadsPerBlock>>> (data_d);
 
 	duration = (std::clock() - start) / (double)CLOCKS_PER_SEC;	//timer stop
-	std::cout << "CUDA sorting time: " << duration << " sec" << std::endl;
 
 	if ((blob = cudaMemcpy(dataSorted, data_d, (DATA_AMOUNT) * sizeof(int), cudaMemcpyDeviceToHost)) != cudaSuccess) PrintError(2, &blob);
 	if ((blob = cudaFree(data_d)) != cudaSuccess) PrintError(3, &blob);
 
+	std::cout << "CUDA sorting time: " << duration << " sec" << std::endl;
 	return dataSorted;
 }
 
@@ -146,28 +167,25 @@ int* SortCPU(int* data) {
 	std::clock_t start;
 	double duration;
 	int* dataSorted = data;
+	int mod;
 
 	start = std::clock();	//timer start
-	float checkpoint = 10;	//%
 
-	for (int i = 0; i < DATA_AMOUNT; i++) {
-		float rand = ((i*100) / DATA_AMOUNT);
-		if (rand > checkpoint) {
-			std::cout << checkpoint << "%" << std::endl;
-			checkpoint += 10;
-		}
-		for (int j = 0; j < DATA_AMOUNT - i; j++)
-			SortElements(dataSorted, j);
+	for (int i = 0; i < DATA_AMOUNT; ++i) {	//will run DATA_AMOUNT times
+		mod = i%2;
+		for (int j = 0; j < DATA_AMOUNT; j +=2)	//will run DATA_AMOUNT/2 times
+			SortElements(dataSorted, j, mod);
 	}
 
 	duration = (std::clock() - start) / (double)CLOCKS_PER_SEC;	//timer stop
-	std::cout << "CPU sorting time: " << duration << " sec" << std::endl;
 
+	std::cout << "CPU sorting time: " << duration << " sec" << std::endl;
 	return dataSorted;
 }
 
 //SORTING ALGORITHM USED BY CPU
-void SortElements(int* data, int pos) {
+void SortElements(int* data, int pos, int mod) {
+	pos += mod;
 	if (data[pos] > data[pos+1]) {
 		int temp = data[pos];
 		data[pos] = data[pos + 1];
@@ -178,20 +196,26 @@ void SortElements(int* data, int pos) {
 //CHECK RESULT
 void CheckDataOrder(int dataSorted[]) {
 	/*std::cout << "Post sort:  ";
-	for (int i = 0; (i < DATA_AMOUNT - 1) && (i < 7); i++)
+	for (int i = 0; (i < DATA_AMOUNT - 1) && (i < 10); i++)
 		std::cout << dataSorted[i] << ", ";
-	std::cout << dataSorted[DATA_AMOUNT - 1] << (DATA_AMOUNT > 10 ? "..." : "") << std::endl;*/
-	
+	std::cout << dataSorted[10] << (DATA_AMOUNT > 10 ? "..." : "") << std::endl;*/
+
 	int unsortedCount = 0;
-	for (int i = 0; i < DATA_AMOUNT - 1; i++)
+	bool incorrectValues = false;
+	for (int i = 0; i < DATA_AMOUNT-1; i++) {
 		if (dataSorted[i] > dataSorted[i + 1]) {
 			unsortedCount++;
+			std::cout << "it:" << i << " - ..." << dataSorted[i - 2] << ", " << dataSorted[i - 1] << ", " << dataSorted[i] << ", " << dataSorted[i + 1] << ", " << dataSorted[i + 2] << "..." << std::endl;
 		}
+		if (dataSorted[i] > DATA_AMOUNT || dataSorted[i] < 0)
+			incorrectValues == true;
+	}
+	std::cout << std::endl;
 
 	if (unsortedCount > 0)
 		std::cout << "WARNING: " << unsortedCount << " elements unsorted" << std::endl;
 
-	if (dataSorted[0] < 0 || dataSorted[DATA_AMOUNT-1] < 0)
+	if (incorrectValues == true)
 		std::cout << "WARNING: incorrect array values" << std::endl;
 	
 	if(!(unsortedCount > 0) && !(dataSorted[0] < 0 || dataSorted[DATA_AMOUNT - 1] < 0))

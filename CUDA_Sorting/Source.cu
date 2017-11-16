@@ -17,8 +17,8 @@ void CheckDataOrder(int dataSorted[]);
 void PrintError(int zone, cudaError_t* blob);
 
 #define DATA_AMOUNT 200
-#define BLOCK_AMOUNT 1024
-#define THREADS_PER_BLOCK 32
+#define BLOCK_AMOUNT 8
+#define THREADS_PER_BLOCK 16
 #define THREADS_PER_GRID (BLOCK_AMOUNT*THREADS_PER_BLOCK)	//max 131072 ???
 
 const dim3 blockSize = dim3(BLOCK_AMOUNT, 1, 1);
@@ -26,53 +26,23 @@ const dim3 threadsPerBlock = dim3(THREADS_PER_BLOCK, 1, 1);
 
 //DEVICE
 __global__
-void OddEvenSortv1(int* data_d, int n, int blockRoof, int loopNr) {
-	int i = threadIdx.x + (THREADS_PER_BLOCK * blockIdx.x) + (THREADS_PER_GRID * loopNr);
-	i *= 2;
-	int evenSwitch = 0;
+void OddEvenSort(int* data_d, int n) {
+	int id = threadIdx.x + blockDim.x * blockIdx.x;
 
-	int compLeft = data_d[i];
-	int compMid = data_d[i + 1];
-
-	if (i < DATA_AMOUNT) {
-		if (compLeft > compMid) {
-			int temp = compLeft;
-			compLeft = compMid;
-			compMid = temp;
-			data_d[i] = (int)compLeft;
-			evenSwitch++;
-		}
-
-		i++;
-		__syncthreads();
-		int compRight = data_d[i + 1];
-
-		if (compMid > compRight) {
-			data_d[i] = compRight;
-			data_d[i + 1] = compMid;
-		}
-		else if (evenSwitch > 0) {
-			data_d[i] = compMid;
-		}
-	}
-}
-
-__global__
-void OddEvenSortv2(int* data_d) {
-	int id = threadIdx.x + (blockDim.x * blockIdx.x);
-	id *= 2;
-
-	if (id < DATA_AMOUNT) {
+	if ((id *= 2) < n) {
 		int pos;
+		int mod = 0;
 
-		for (int i = 0; i < DATA_AMOUNT; ++i) {
-			pos = id + i%2;
-			__syncthreads;
+		for (int i = 0; i < n; ++i) {
+			pos = id + mod;
 			if (data_d[pos] > data_d[pos + 1]) {
 				int temp = data_d[pos];
 				data_d[pos] = data_d[pos + 1];
 				data_d[pos + 1] = temp;
 			}
+			if (mod == 0) mod = 1;
+			else mod = 0;
+			__syncthreads;
 		}
 	}
 }
@@ -123,35 +93,27 @@ void FillArray(int data[]) {
 	if (!(DATA_AMOUNT % 2))
 		data[DATA_AMOUNT] = (int)DATA_AMOUNT + 1;
 
+	/*
 	std::cout << "Pre sort:   ";
 	for (int i = 0; (i < DATA_AMOUNT - 1) && (i < 10); i++)
 		std::cout << data[i] << ", ";
 	std::cout << data[10] << (DATA_AMOUNT > 10 ? "..." : "") << std::endl << std::endl;
+	*/
 }
 
 //SORT DATA WITH CUDA USING ODD-EVEN SORTING
 int* SortCUDA(int* data) {
-	srand(time(NULL));
 	std::clock_t start;
 	double duration;
 	int* dataSorted = new int[DATA_AMOUNT];
 	int* data_d = 0;
 	cudaError_t blob;
-	int loops = 1;
-
-	/*while ((BLOCK_AMOUNT*THREADS_PER_BLOCK*loops) < DATA_AMOUNT)
-		loops++;*/
 
 	if ((blob = cudaMalloc((void**)&data_d, (DATA_AMOUNT+1) * sizeof(int))) != cudaSuccess) PrintError(0, &blob);
 	if ((blob = cudaMemcpy(data_d, data, (DATA_AMOUNT+1) * sizeof(int), cudaMemcpyHostToDevice)) != cudaSuccess) PrintError(1, &blob);
 
 	start = std::clock();	//timer start
-	//for (int i = 0; i < (DATA_AMOUNT / 2) + 1; i++)
-		/*for(int j = 0; j < loops; j++)
-			OddEvenSortv1<<<blockSize, threadsPerBlock >>> (data_d, (int)DATA_AMOUNT, (int)BLOCK_AMOUNT, j);*/
-			
-	OddEvenSortv2<<<blockSize, threadsPerBlock>>> (data_d);
-
+	OddEvenSort<<<blockSize, threadsPerBlock>>> (data_d, (int)DATA_AMOUNT);
 	duration = (std::clock() - start) / (double)CLOCKS_PER_SEC;	//timer stop
 
 	if ((blob = cudaMemcpy(dataSorted, data_d, (DATA_AMOUNT) * sizeof(int), cudaMemcpyDeviceToHost)) != cudaSuccess) PrintError(2, &blob);
@@ -163,7 +125,6 @@ int* SortCUDA(int* data) {
 
 //SORT DATA WITH CPU USING ODD-EVEN SORTING
 int* SortCPU(int* data) {
-	srand(time(NULL));
 	std::clock_t start;
 	double duration;
 	int* dataSorted = data;
@@ -205,10 +166,10 @@ void CheckDataOrder(int dataSorted[]) {
 	for (int i = 0; i < DATA_AMOUNT-1; i++) {
 		if (dataSorted[i] > dataSorted[i + 1]) {
 			unsortedCount++;
-			std::cout << "it:" << i << " - ..." << dataSorted[i - 2] << ", " << dataSorted[i - 1] << ", " << dataSorted[i] << ", " << dataSorted[i + 1] << ", " << dataSorted[i + 2] << "..." << std::endl;
+			std::cout << "it:" << i << " - ... " << dataSorted[i - 2] << ", " << dataSorted[i - 1] << ", " << dataSorted[i] << ", " << dataSorted[i + 1] << ", " << dataSorted[i + 2] << " ..." << std::endl;
 		}
 		if (dataSorted[i] > DATA_AMOUNT || dataSorted[i] < 0)
-			incorrectValues == true;
+			incorrectValues = true;
 	}
 	std::cout << std::endl;
 

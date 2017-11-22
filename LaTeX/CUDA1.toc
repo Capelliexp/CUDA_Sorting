@@ -1,0 +1,7 @@
+\select@language {swedish}
+\contentsline {section}{Inneh\r all}{1}
+\contentsline {section}{Implementation}{2}
+\contentsline {subsection}{Iteration 1: generating a random sequence of integers}{2}
+\contentsline {subsection}{Iteration 2: single thread based odd-even sorting}{2}
+\contentsline {subsection}{Iteration 3: parallel odd-even sorting by using CUDA}{2}
+\contentsline {section}{Performance}{2}

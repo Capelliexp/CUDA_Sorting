@@ -5,7 +5,7 @@
 #include <string>
 #include <iostream>
 #include <windows.h>
-#include <time.h>
+//#include <time.h>
 #include <ctime>
 
 void PrintGenInfo();
@@ -16,9 +16,11 @@ void SortElements(int* data, int pos, int mod);
 void CheckDataOrder(int dataSorted[]);
 void PrintError(std::string zone, cudaError_t* blob);
 
-#define DATA_AMOUNT 200
-#define BLOCK_AMOUNT 10
-#define THREADS_PER_BLOCK 10
+//https://stackoverflow.com/questions/5856250/using-nsight-to-debug
+
+#define DATA_AMOUNT 7500
+#define BLOCK_AMOUNT 1
+#define THREADS_PER_BLOCK 1000 //max 1024
 #define THREADS_IN_GRID (BLOCK_AMOUNT*THREADS_PER_BLOCK)	//max 131072 ???
 
 const dim3 blockSize = dim3(BLOCK_AMOUNT, 1, 1);
@@ -26,30 +28,51 @@ const dim3 threadsPerBlock = dim3(THREADS_PER_BLOCK, 1, 1);
 
 //DEVICE
 __global__
-void OddEvenSort(int* data_d, int n) {
+void OddEvenSort(int* data_d, int iterAmount) {
 	int id = threadIdx.x + blockDim.x * blockIdx.x;
-
-	if ((id *= 2) < n) {
-		int pos;
+	
+	if ((id *= iterAmount) < DATA_AMOUNT) {
 		int mod = 0;
-
-		for (int i = 0; i < n; ++i) {
-			pos = id + mod;
-			__syncthreads;
-			if (data_d[pos] > data_d[pos + 1]) {
-				int temp = data_d[pos];
-				data_d[pos] = data_d[pos + 1];
-				data_d[pos + 1] = temp;
+		
+		for (int i = 0; i < DATA_AMOUNT; ++i) {
+			__syncthreads();
+			for (int j = 0; j < iterAmount; j += 2) {
+				int pos = id + mod + j;
+				if ((pos + 1) < DATA_AMOUNT) {
+					int reg1 = data_d[pos];
+					int reg2 = data_d[pos + 1];
+					if (reg1 > reg2) {
+						data_d[pos] = reg2;
+						data_d[pos + 1] = reg1;
+					}
+					/*if (data_d[pos] > data_d[pos + 1]) {
+						int temp = data_d[pos];
+						data_d[pos] = data_d[pos + 1];
+						data_d[pos+1] = temp;
+					}*/
+				}
+				
 			}
 			if (mod == 0) mod = 1;
 			else mod = 0;
 		}
+		
 	}
+	
+}
+
+__global__
+void Nothing(int* data_d, int iterAmount) {
+	int id = threadIdx.x + blockDim.x * blockIdx.x;
+	id *= iterAmount;
+
+	for (int i = 0; i < iterAmount; i++)
+		data_d[id + i] = data_d[id + i + 1] + id + i;
 }
 
 //HOST
 int main(int argc, char* argv[]) {
-	int* data = new int[DATA_AMOUNT + 1];
+	int* data = new int[DATA_AMOUNT];
 	int* dataSortedByCUDA = new int[DATA_AMOUNT];
 	int* dataSortedByCPU = new int[DATA_AMOUNT];
 
@@ -59,9 +82,9 @@ int main(int argc, char* argv[]) {
 	dataSortedByCUDA = SortCUDA(data);
 	CheckDataOrder(dataSortedByCUDA);
 
-	/*std::cout << std::endl;
+	std::cout << std::endl;
 	dataSortedByCPU = SortCPU(data);	
-	CheckDataOrder(dataSortedByCPU);*/
+	CheckDataOrder(dataSortedByCPU);
 
 	std::cout << std::endl << "fin" << std::endl;
 	getchar();
@@ -83,12 +106,19 @@ void PrintGenInfo() {
 		"BLOCK_AMOUNT: " << BLOCK_AMOUNT << std::endl <<
 		"THREADS_PER_BLOCK: " << THREADS_PER_BLOCK << std::endl <<
 		std::endl << "Available devices: " << deviceCount << std::endl <<
-		"Device in use: " << setDevice << std::endl;
+		"Device ID in use: <" << setDevice << ">" << std::endl;
 
 
-	if ((BLOCK_AMOUNT*THREADS_PER_BLOCK * 2) < DATA_AMOUNT)
-		std::cout << std::endl << "!!! WARNING: not enough threads to cover data length !!!" << std::endl;
-
+	if ((THREADS_PER_BLOCK * 2) < DATA_AMOUNT) {
+		int iterAmount = 2;
+		while (1) {
+			if (THREADS_PER_BLOCK*iterAmount >= DATA_AMOUNT)
+				break;
+			iterAmount += 2;
+		}
+		std::cout << std::endl << "WARNING: low thread count forces " << iterAmount/2 << " thread loops" << std::endl;
+	}
+		
 	std::cout << std::endl;
 }
 
@@ -97,9 +127,6 @@ void FillArray(int data[]) {
 	srand(time(NULL));
 	for (int i = 0; i < DATA_AMOUNT; i++)
 		data[i] = (rand() % DATA_AMOUNT) + 1;
-
-	if (!(DATA_AMOUNT % 2))
-		data[DATA_AMOUNT] = (int)DATA_AMOUNT + 1;
 
 	/*
 	std::cout << "Pre sort:   ";
@@ -111,22 +138,37 @@ void FillArray(int data[]) {
 
 //SORT DATA WITH CUDA USING ODD-EVEN SORTING
 int* SortCUDA(int* data) {
-	std::clock_t start;
 	int* dataSorted = new int[DATA_AMOUNT];
+	//int* dataSorted = (int*)malloc(DATA_AMOUNT * sizeof(int));
 	int* data_d = 0;
 	cudaError_t blob;
+	int iterAmount = 2;
+	cudaEvent_t start, stop;
+	float duration = 0;
+	cudaEventCreate(&start);
+	cudaEventCreate(&stop);
 
-	if ((blob = cudaMalloc((void**)&data_d, (DATA_AMOUNT+1) * sizeof(int))) != cudaSuccess) PrintError("Mal1", &blob);
-	if ((blob = cudaMemcpy(data_d, data, (DATA_AMOUNT+1) * sizeof(int), cudaMemcpyHostToDevice)) != cudaSuccess) PrintError("Cpy1", &blob);
+	while (1) {
+		if (THREADS_PER_BLOCK*iterAmount >= DATA_AMOUNT)
+			break;
+		iterAmount += 2;
+	}
 
-	start = std::clock();	//timer start
-	OddEvenSort<<<blockSize, threadsPerBlock>>> (data_d, DATA_AMOUNT);
-	double duration = (std::clock() - start) / (double)CLOCKS_PER_SEC;	//timer stop
+	if ((blob = cudaMalloc((void**)&data_d, DATA_AMOUNT * sizeof(int))) != cudaSuccess) PrintError("Mal1", &blob);
+	if ((blob = cudaMemcpy(data_d, data, DATA_AMOUNT * sizeof(int), cudaMemcpyHostToDevice)) != cudaSuccess) PrintError("Cpy1", &blob);
 
-	if ((blob = cudaMemcpy(dataSorted, data_d, (DATA_AMOUNT) * sizeof(int), cudaMemcpyDeviceToHost)) != cudaSuccess) PrintError("Cpy2", &blob);
+	cudaEventRecord(start);
+	OddEvenSort<<<BLOCK_AMOUNT, THREADS_PER_BLOCK>>>(data_d, iterAmount);
+	//Nothing<<<BLOCK_AMOUNT, THREADS_PER_BLOCK>>>(data_d, iterAmount);
+	cudaEventRecord(stop);
+
+	if ((blob = cudaMemcpy(dataSorted, data_d, DATA_AMOUNT * sizeof(int), cudaMemcpyDeviceToHost)) != cudaSuccess) PrintError("Cpy2", &blob);
 	if ((blob = cudaFree(data_d)) != cudaSuccess) PrintError("Free1", &blob);
 
-	std::cout << "CUDA sorting time: " << duration << " sec" << std::endl;
+	cudaEventSynchronize(stop);
+	cudaEventElapsedTime(&duration, start, stop);
+
+	std::cout << "CUDA sorting time: " << duration/1000 << " sec" << std::endl;
 	return dataSorted;
 }
 
@@ -139,10 +181,10 @@ int* SortCPU(int* data) {
 	start = std::clock();	//timer start
 	for (int i = 0; i < DATA_AMOUNT; ++i) {	//will run DATA_AMOUNT times
 		mod = i%2;
-		for (int j = 0; j < DATA_AMOUNT; j +=2)	//will run DATA_AMOUNT/2 times
+		for (int j = 0; j < DATA_AMOUNT-1; j +=2)	//will run DATA_AMOUNT/2 times
 			SortElements(dataSorted, j, mod);
 	}
-	double duration = (std::clock() - start) / (double)CLOCKS_PER_SEC;	//timer stop
+	long double duration = (std::clock() - start) / (long double)CLOCKS_PER_SEC;	//timer stop
 
 	std::cout << "CPU sorting time: " << duration << " sec" << std::endl;
 	return dataSorted;
@@ -151,7 +193,7 @@ int* SortCPU(int* data) {
 //SORTING ALGORITHM USED BY CPU
 void SortElements(int* data, int pos, int mod) {
 	pos += mod;
-	if (data[pos] > data[pos+1]) {
+	if (data[pos] > data[pos+1] && pos + 1 < DATA_AMOUNT) {
 		int temp = data[pos];
 		data[pos] = data[pos + 1];
 		data[pos + 1] = temp;
@@ -170,15 +212,14 @@ void CheckDataOrder(int dataSorted[]) {
 	for (int i = 0; i < DATA_AMOUNT-1; i++) {
 		if (dataSorted[i] > dataSorted[i + 1]) {
 			unsortedCount++;
-			std::cout << "it:" << i << " - ... " << dataSorted[i - 2] << ", " << dataSorted[i - 1] << ", " << dataSorted[i] << ", " << dataSorted[i + 1] << ", " << dataSorted[i + 2] << " ..." << std::endl;
+			//std::cout << "it:" << i << " - ... " << dataSorted[i - 2] << ", " << dataSorted[i - 1] << ", " << dataSorted[i] << ", " << dataSorted[i + 1] << ", " << dataSorted[i + 2] << " ..." << std::endl;
 		}
 		if (dataSorted[i] > DATA_AMOUNT || dataSorted[i] < 0)
 			incorrectValues = true;
 	}
-	std::cout << std::endl;
 
 	if (unsortedCount > 0)
-		std::cout << "WARNING: " << unsortedCount << " elements unsorted" << std::endl;
+		std::cout << std::endl << "WARNING: " << unsortedCount << " elements unsorted" << std::endl;
 
 	if (incorrectValues == true)
 		std::cout << "WARNING: incorrect array values" << std::endl;
@@ -189,6 +230,6 @@ void CheckDataOrder(int dataSorted[]) {
 
 //CUDA ERROR TYPE PRINT 
 void PrintError(std::string zone, cudaError_t* blob) {
-	std::cout << "ERROR: " << zone << cudaGetErrorString(*blob) << std::endl;
+	std::cout << "ERROR" << std::endl << "   zone: " << zone << std::endl << "   output: " << cudaGetErrorString(*blob) << std::endl;
 	*blob = cudaDeviceReset();
 }

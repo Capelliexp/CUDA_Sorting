@@ -1,0 +1,182 @@
+\documentclass[a4paper,11pt]{article}
+
+\usepackage[T1]{fontenc}	      %font - (base) HA ALLTID MED
+\usepackage{lmodern}						%font - Standard
+
+\usepackage[swedish]{babel}   %svenska
+\usepackage[utf8]{inputenc}   %svenska åäö
+\usepackage{lipsum}           %onödiga texten
+\usepackage{booktabs}         %referat
+\usepackage{amsmath, amssymb, upref} %matte
+\usepackage{amsthm}           %omgivningar
+
+\usepackage{caption}
+\usepackage{subcaption}	%använd antingen cap & subcap ELLER hyperref
+\usepackage{tocbibind}        %till referenser i innehållsförteckning
+\usepackage{graphicx}         %till implementering av bilder
+\usepackage{color}						%för text i färg
+\usepackage[framemethod=tikz]{mdframed}	%highlighting hela stycken
+\usepackage{listings}	%för kod
+\usepackage{lr-cover}         %Roberts förstasida
+\usepackage{labrapport}				%Roberts rapportmall
+
+\usepackage{setspace}	%line space
+	\singlespacing
+	%\onehalfspacing
+	%\doublespacing
+
+\definecolor{dkgreen}{rgb}{0,0.6,0}		%för kod
+\definecolor{gray}{rgb}{0.5,0.5,0.5}	%för kod
+\definecolor{mauve}{rgb}{0.58,0,0.82}	%för kod
+
+\lstset{	%för kod
+	frame=tb,
+  language=c++,
+  aboveskip=3mm,
+  belowskip=3mm,
+  showstringspaces=false,
+  columns=flexible,
+  basicstyle={\small\ttfamily},
+  numbers=none,
+  numberstyle=\tiny\color{gray},
+  keywordstyle=\color{blue},
+  commentstyle=\color{dkgreen},
+  stringstyle=\color{mauve},
+  breaklines=true,
+  breakatwhitespace=true,
+  tabsize=3
+}
+
+\long\def\*#1*/{}	%kommentarer - \* nu skriver jag en kommentar */
+
+\begin{document}
+
+\title{Project 1 \\ Odd-Even Sorting \\ 
+Advanced multi core programming, DV2575}
+\author{Filip Pentikäinen}
+\date{\today}
+\maketitle
+
+\tableofcontents
+\newpage
+
+\section{Implementation}
+\subsection{Iteration 1: generating a random sequence of integers}
+Creating a function generating random numbers is quite easy in C using the rand() function. Using the defined constant \textit{DATA\_AMOUNT} the data[] array is filled as seen in Figure 1.
+\begin{figure}[ht]
+\begin{lstlisting}
+   void FillArray(int data[]) {
+	    srand(time(NULL));
+	    for (int i = 0; i < DATA_AMOUNT; i++)
+	       data[i] = (rand()%DATA_AMOUNT) + 1;
+   }
+\end{lstlisting}
+\caption{Function responsible for filling array with random integers}
+\end{figure}
+
+%---------------------
+
+\subsection{Iteration 2: single thread based odd-even sorting}
+Creating an outer loop that runs as many times as there are elements and creating an inner loop that loops for every other element in the array will create an algorithm with \textit{O(n$^2$)} complexity.
+This will ensure that every odd/even element is compared to the element to its right and swapped accordingly.
+
+\begin{figure}[ht]
+\begin{lstlisting}
+   int* SortCPU(int* data) {
+      int* dataSorted = data;
+      for (int i = 0; i < DATA_AMOUNT; ++i)
+         for (int j = 0; j < DATA_AMOUNT-1; j +=2){
+            pos = j + i%2;
+            if(data[pos] > data[pos+1] && (pos+1) < DATA_AMOUNT) {
+               int temp = data[pos];
+               data[pos] = data[pos + 1];
+               data[pos + 1] = temp;
+            }
+         }
+      return dataSorted;
+   }
+\end{lstlisting}
+\caption{Algorithm for single threaded sorting}
+\end{figure}
+
+%---------------------
+
+\subsection{Iteration 3: parallel odd-even sorting by using CUDA}
+
+\begin{figure}[ht]
+\begin{lstlisting}
+   __global__
+   void OddEvenSort(int* data_d, int iterAmount) {
+      int id = threadIdx.x + blockDim.x * blockIdx.x;
+	
+      if ((id *= iterAmount) < DATA_AMOUNT) {
+         int mod = 0;
+		
+         for (int i = 0; i < DATA_AMOUNT; ++i) {
+            __syncthreads();
+            for (int j = 0; j < iterAmount; j += 2) {
+               int pos = id + mod + j;
+               if ((pos + 1) < DATA_AMOUNT) {
+                  int reg1 = data_d[pos];
+                  int reg2 = data_d[pos + 1];
+                  if (reg1 > reg2) {
+                     data_d[pos] = reg2;
+                     data_d[pos + 1] = reg1;
+                  }
+               }
+            }
+            if (mod == 0) mod = 1;
+            else mod = 0;
+         }
+      }
+   }
+\end{lstlisting}
+\caption{Algorithm for multi threaded sorting using CUDA}
+\end{figure}
+
+\section{Performance}
+
+\end{document}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
